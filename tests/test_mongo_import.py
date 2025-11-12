@@ -1,58 +1,62 @@
-"""
-Unit tests for MongoImporter module
------------------------------------
-Ensures MongoDB connection, JSON loading,
-folder import behavior, and .env configuration work as expected.
-"""
-
-import sys, os, pytest
-
-# Allow tests to import src/ modules
-
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+import os
+import json
+import pytest
+import mongomock
+from unittest.mock import patch
 from src.mongo_import import MongoImporter
 
-"""---Test MongoDB connection establishment---"""
 
-
-def test_mongo_connection():
-    importer = MongoImporter()
-    client = importer.get_mongo_client()
-    assert client is not None, "MongoDB client should connect successfully."
-
-
-"""---Test importing a valid JSON file into test database---"""
-
-
-def test_import_folder_success(tmp_path):
+@pytest.fixture
+def tmp_data_dir(tmp_path):
+    """Creates temporary JSON data for import testing."""
     folder = tmp_path / "data"
     folder.mkdir()
-    (folder / "sample.json").write_text('[{"name": "John Doe"}]')
 
-    importer = MongoImporter()
-    result = importer.import_folder(str(folder), "test_db")
-    assert result is True or result is None
+    file1 = folder / "employees.json"
+    file1.write_text(json.dumps([
+        {"name": "Alice", "role": "Analyst"},
+        {"name": "Bob", "role": "Engineer"}
+    ]))
 
+    file2 = folder / "departments.json"
+    file2.write_text(json.dumps([
+        {"dept": "IT", "head": "Carol"},
+        {"dept": "Finance", "head": "Dave"}
+    ]))
 
-"""---Test that nonexistent folder returns None gracefully---"""
-
-
-def test_import_folder_not_found():
-    importer = MongoImporter()
-    result = importer.import_folder("E:/non_existing_path", "test_db")
-    assert result is None
-
-
-"""---Test that invalid JSON file is skipped without crashing---"""
+    return str(folder)
 
 
-def test_invalid_json(tmp_path):
-    folder = tmp_path / "invalid"
+def test_import_all_inserts_documents(tmp_data_dir):
+    """Validates multiple JSON collections are inserted properly."""
+
+    with patch("src.mongo_import.MongoClient", new=mongomock.MongoClient):
+        importer = MongoImporter(
+            mongo_uri="mongodb://fake-uri",
+            db_name="test_db",
+            data_path=tmp_data_dir
+        )
+
+        importer.import_all()
+
+        client = mongomock.MongoClient()
+        db = client["test_db"]
+
+        employees = list(db["employees"].find())
+        departments = list(db["departments"].find())
+
+        assert len(employees) == 2
+        assert len(departments) == 2
+        assert employees[0]["name"] == "Alice"
+        assert departments[1]["dept"] == "Finance"
+
+
+def test_empty_folder_is_handled(tmp_path):
+    """Ensures empty data folders do not cause crashes."""
+    folder = tmp_path / "empty"
     folder.mkdir()
-    (folder / "bad.json").write_text("{invalid_json: true}")
 
-    importer = MongoImporter()
-    importer.import_folder(str(folder), "test_db")
-    # Not raising exceptions, but handles gracefully
-    assert True
+    with patch("src.mongo_import.MongoClient", new=mongomock.MongoClient):
+        importer = MongoImporter("mongodb://fake", "db", str(folder))
+        importer.import_all()  # Should not raise any exception
+
