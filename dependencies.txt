@@ -1,4 +1,8 @@
 pymongo
-python-dotenv
 pytest
-flake8
+bson
+python-dotenv
+openpyxl
+pre-commit
+black
+pylint
